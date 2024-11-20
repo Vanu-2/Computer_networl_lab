@@ -3,7 +3,7 @@ using namespace std;
 
 #define MAX_PKT 1024
 #define TOTAL_FRAMES 8
-#define WINDOW_SIZE 2
+#define WINDOW_SIZE 4 // Larger window to showcase selective repeat
 
 typedef int seq_num;
 
@@ -51,7 +51,8 @@ void wait_for_event(event_type &event) {
 void p() {
     int window_start = 0;
     int next_frame = 0;
-    int previous_ack = -1;  // Acknowledgment tracker for Go-Back-N
+    int ack_count = 0;
+    seq_num previous_acks[TOTAL_FRAMES] = {-1}; // Array to track individual frame acknowledgments
     event_type event;
 
     frame far[TOTAL_FRAMES];
@@ -65,8 +66,8 @@ void p() {
         far[i].ack = -1;       // Initial acknowledgment is -1
     }
 
-    // Go-Back-N ARQ loop
-    while (previous_ack < (TOTAL_FRAMES - 1)) {
+    // Selective Repeat ARQ loop
+    while (ack_count < TOTAL_FRAMES) {
         // Print the current window
         cout << "Current Window: ";
         for (int i = window_start; i < window_start + WINDOW_SIZE && i < TOTAL_FRAMES; i++) {
@@ -76,10 +77,9 @@ void p() {
 
         // Send frames within the window
         for (int i = window_start; i < window_start + WINDOW_SIZE && i < TOTAL_FRAMES; i++) {
-            if (far[i].seq >= next_frame) {  // Send the frame only if its sequence number is less than next_frame
+            if (far[i].ack == -1) {  // Send the frame only if it hasn't been acknowledged
                 to_physical_layer(far[i]);
                 start_timer(far[i]);
-                next_frame++;
             }
         }
 
@@ -91,28 +91,36 @@ void p() {
                 from_physical_layer(far[window_start], ack);  // Get acknowledgment for the frame
                 stop_timer(far[window_start]);
 
-                // Deliver the packet to the network layer if it's within the current window
-                to_network_layer(far[window_start].info, far[window_start].seq);
-
-                // Update the previous_ack to the acknowledgment number
-                previous_ack = ack;
-
-                // Slide the window forward: Go-Back-N resends all frames after an unacknowledged frame
-                if (ack == window_start) {
-                    // If the first frame in the window is acknowledged, move the window forward
-                    window_start = previous_ack + 1;
+                // Deliver the packet to the network layer
+                if (ack != -1 && previous_acks[ack] == -1) {
+                    to_network_layer(far[ack].info, ack); // Only deliver the packet if not already delivered
+                    previous_acks[ack] = ack;             // Mark as acknowledged
+                    ack_count++;                          // Increment the acknowledged frame counter
                 }
             }
             else if (event == timeout) {
-                // Handle timeout: resend all frames starting from the window_start
+                // Handle timeout: resend all frames that are not acknowledged
                 cout << "Timeout occurred for frame " << window_start << endl;
-                next_frame = window_start;
+                for (int i = window_start; i < window_start + WINDOW_SIZE && i < TOTAL_FRAMES; i++) {
+                    if (far[i].ack == -1) {
+                        to_physical_layer(far[i]);
+                        start_timer(far[i]);
+                    }
+                }
+            }
+        }
+
+        // Check if the window can slide
+        if (ack_count > 0) {
+            window_start++;
+            if (window_start >= TOTAL_FRAMES) {
+                break; // End when all frames have been acknowledged
             }
         }
     }
 }
 
 int main() {
-    p(); // Start the Go-Back-N ARQ protocol simulation
+    p(); // Start the Selective Repeat ARQ protocol simulation
     return 0;
 }
